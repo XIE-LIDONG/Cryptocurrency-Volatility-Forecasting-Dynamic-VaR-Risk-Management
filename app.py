@@ -227,3 +227,4 @@ elif page == "Prediction":
     st.write(f"GARCH Pred Vol: {garch_next_vol*100:.2f}%")
     st.write(f"EWMA Pred Vol: {ewma_next_vol*100:.2f}%")
 
+
