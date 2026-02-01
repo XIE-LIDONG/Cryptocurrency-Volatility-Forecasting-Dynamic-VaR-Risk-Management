@@ -157,7 +157,7 @@ elif page == "GARCH Validation":
     df = st.session_state.get('df')
     if df is None:
         st.warning("Run analysis first!")
-        return
+        st.stop()
     # 极简绘图
     fig, ax = plt.subplots(figsize=(15,7))
     ax.plot(df['date'], df['returns'], 'gray', alpha=0.5, label='Returns')
@@ -179,7 +179,7 @@ elif page == "EWMA Validation":
     df = st.session_state.get('df')
     if df is None:
         st.warning("Run analysis first!")
-        return
+        st.stop()
     df_ewma = df.dropna(subset=['ewma_vol'])
     fig, ax = plt.subplots(figsize=(15,7))
     ax.plot(df_ewma['date'], df_ewma['returns'], 'gray', alpha=0.5, label='Returns')
@@ -201,7 +201,7 @@ elif page == "Comparison":
     df = st.session_state.get('df')
     if df is None:
         st.warning("Run analysis first!")
-        return
+        st.stop()
     df_comp = df.dropna(subset=['cond_vol', 'ewma_vol'])
     # 波动率对比
     fig, ax = plt.subplots(figsize=(15,7))
@@ -216,7 +216,7 @@ elif page == "Prediction":
     df = st.session_state.get('df')
     if df is None:
         st.warning("Run analysis first!")
-        return
+         st.stop()
     # GARCH预测
     last_garch_vol = df['cond_vol'].iloc[-1]
     garch_next_vol = np.sqrt(st.session_state.get('garch_params')['omega'] + st.session_state.get('garch_params')['alpha']*df['returns'].iloc[-1]**2 + st.session_state.get('garch_params')['beta']*last_garch_vol**2)
@@ -226,3 +226,4 @@ elif page == "Prediction":
     # 展示
     st.write(f"GARCH Pred Vol: {garch_next_vol*100:.2f}%")
     st.write(f"EWMA Pred Vol: {ewma_next_vol*100:.2f}%")
+
