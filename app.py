@@ -185,26 +185,22 @@ if page == "🏠 Home":
         )
         st.session_state.selected_asset = selected_asset
     with col2:
-    # 分开选择起始/结束日期（手选，默认2024-01-01到最新）
-    min_date = pd.Timestamp("2017-01-01").date()  # 最早可选日期
-    max_date = pd.Timestamp.now().date()          # 最晚可选日期
-    default_start = pd.Timestamp("2024-01-01").date()  # 默认起始日期
-    default_end = max_date                             # 默认结束日期
-    
-    # 单独的起始日期选择框
-    start_date = st.date_input(
-        "Start Date",
-        value=default_start,
-        min_value=min_date,
-        max_value=max_date
-    )
-    # 单独的结束日期选择框
-    end_date = st.date_input(
-        "End Date",
-        value=default_end,
-        min_value=min_date,
-        max_value=max_date
-    )
+        min_date = pd.Timestamp("2017-01-01").date()
+        max_date = pd.Timestamp.now().date()        
+        default_start = pd.Timestamp("2024-01-01").date()
+        default_end = max_date                         
+        start_date = st.date_input(
+            "Start Date",
+            value=default_start,
+            min_value=min_date,
+            max_value=max_date
+        )
+        end_date = st.date_input(
+            "End Date",
+            value=default_end,
+            min_value=min_date,
+            max_value=max_date
+        )
     with col3:
         var_dist = st.radio(
             "VaR Distribution Type",
@@ -431,4 +427,5 @@ elif page == "🔮 Prediction":
         - With 99% confidence (extreme risk): Maximum expected loss = **{var_99*100:.2f}%**
         - t-Distribution VaR accounts for crypto's fat tail (more conservative)
         """)
+
 
