@@ -163,7 +163,6 @@ page = st.sidebar.radio(
 if page == "🏠 Home":
     st.title("📈 Crypto Volatility & VaR Dashboard")
     st.subheader("Real-Time GARCH(1,1) Modeling & Risk Analysis for BTC/ETH")
-    st.markdown("*Automatically pulls data from Yahoo Finance | No manual CSV required*")
     st.divider()
     
     # 核心选择区
@@ -412,5 +411,6 @@ elif page == "🔮 Prediction":
         - With 99% confidence (extreme risk): Maximum expected loss = **{var_99*100:.2f}%**
         - t-Distribution VaR accounts for crypto's fat tail (more conservative)
         """)
+
 
 
