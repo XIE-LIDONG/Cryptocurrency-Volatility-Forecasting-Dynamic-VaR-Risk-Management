@@ -16,7 +16,7 @@ st.set_page_config(
     layout="wide"
 )
 
-# Plot config
+# Plot configuration
 plt.style.use('default')
 plt.rcParams['font.family'] = 'DejaVu Sans'
 plt.rcParams['axes.unicode_minus'] = False
@@ -185,16 +185,20 @@ if page == "🏠 Home":
         )
         st.session_state.selected_asset = selected_asset
     with col2:
+        # Separate start/end date selection (manual selection, default 2024-01-01 to latest)
         min_date = pd.Timestamp("2017-01-01").date()
-        max_date = pd.Timestamp.now().date()        
+        max_date = pd.Timestamp.now().date()
         default_start = pd.Timestamp("2024-01-01").date()
-        default_end = max_date                         
+        default_end = max_date
+        
+        # Individual start date picker
         start_date = st.date_input(
             "Start Date",
             value=default_start,
             min_value=min_date,
             max_value=max_date
         )
+        # Individual end date picker
         end_date = st.date_input(
             "End Date",
             value=default_end,
@@ -212,7 +216,7 @@ if page == "🏠 Home":
     # Run analysis button
     if st.button("🔄 Run Analysis (Pull Data + Fit GARCH + Calculate VaR)", type="primary"):
         with st.spinner("Processing... (This may take 10-20 seconds)"):
-            # Pull data
+            # Pull data with separate start/end dates
             df = get_crypto_data(selected_asset, start_date, end_date)
             st.session_state.df = df
             st.success(f"✅ Successfully pulled {len(df)} days of {selected_asset} data")
@@ -290,12 +294,11 @@ elif page == "🧪 Model Validation":
         var_dist = st.session_state.var_dist
         var_95 = st.session_state.var_95
         var_99 = st.session_state.var_99
+        garch_params = st.session_state.garch_params
         
-        # Dynamic VaR Risk Analysis
         # ========== GARCH Model Parameters & Full Volatility Comparison ==========
         st.subheader("📊 GARCH Model Parameters & Volatility Comparison")
-        # 展示拟合的GARCH模型参数
-        garch_params = st.session_state.garch_params
+        # Display GARCH model parameters
         param_col1, param_col2, param_col3, param_col4 = st.columns(4)
         with param_col1:
             st.metric("Omega (Constant)", f"{garch_params['omega']:.6f}")
@@ -305,19 +308,24 @@ elif page == "🧪 Model Validation":
             st.metric("Beta (GARCH Term)", f"{garch_params['beta']:.4f}")
         with param_col4:
             st.metric("Long-Term Volatility", f"{garch_params['long_term_vol']*100:.2f}%")
-        
-        fig_vol = plt.subplots(figsize=(15, 6))[1]
-        fig_vol.plot(df['date'], df['cond_vol'], color="royalblue", linewidth=1.2, label="GARCH(1,1) Volatility")
-        fig_vol.plot(df['date'], df['simple_vol'], color="orange", linewidth=1.2, alpha=0.7, label="21-Day Rolling Volatility")
-        fig_vol.set_xlabel("Date")
-        fig_vol.set_ylabel("Volatility (Decimal)")
-        fig_vol.set_title(f"{selected_asset} GARCH Volatility vs Raw Rolling Volatility")
-        fig_vol.legend()
-        fig_vol.grid(alpha=0.3)
+
+        # Plot GARCH volatility vs raw rolling volatility
+        fig_vol, ax_vol = plt.subplots(figsize=(15, 6))
+        ax_vol.plot(df['date'], df['cond_vol'], color="royalblue", linewidth=1.2, label="GARCH(1,1) Volatility")
+        ax_vol.plot(df['date'], df['simple_vol'], color="orange", linewidth=1.2, alpha=0.7, label="21-Day Rolling Volatility")
+        ax_vol.set_xlabel("Date")
+        ax_vol.set_ylabel("Volatility (Decimal)")
+        ax_vol.set_title(f"{selected_asset} GARCH Volatility vs Raw Rolling Volatility")
+        ax_vol.legend()
+        ax_vol.grid(alpha=0.3)
         st.pyplot(fig_vol)
+
+        # Calculate full sample MAE (GARCH vs raw volatility)
         mae_full = np.mean(np.abs(df['cond_vol'] - df['simple_vol']))
         st.metric("Full Sample Volatility MAE (GARCH vs Raw)", f"{mae_full:.6f}")
         st.divider()
+        
+        # ========== Dynamic VaR Risk Analysis ==========
         st.subheader("🛡️ Dynamic VaR Risk Analysis")
         # Calculate breakthrough rates
         break_95_count = df['break_95'].sum()
@@ -355,7 +363,7 @@ elif page == "🧪 Model Validation":
         with col4:
             st.metric("99% VaR Breakthrough Rate", f"{break_99_rate*100:.2f}% ")
         
-        # Rolling window prediction
+        # ========== Rolling Window Prediction ==========
         st.divider()
         st.subheader("🎯 Rolling Window Prediction")
         # Auto calculate window size (1/3 of total data)
@@ -391,14 +399,16 @@ elif page == "🧪 Model Validation":
             
             plt.tight_layout()
             st.pyplot(fig)
-
+            
+            # Rolling prediction stats with MAE
             rolling_break_95 = (rolling_df['actual_loss'] > rolling_df['pred_var_95']).sum()
             rolling_break_95_rate = rolling_break_95 / len(rolling_df)
             rolling_break_99 = (rolling_df['actual_loss'] > rolling_df['pred_var_99']).sum()
             rolling_break_99_rate = rolling_break_99 / len(rolling_df)
             rolling_mae = np.mean(np.abs(rolling_df['pred_vol'] - rolling_df['actual_vol']))
-
-            col1, col2, col3, col4, col5 = st.columns(5)  # 改这里：4→5
+            
+            # 5-column stats (including MAE)
+            col1, col2, col3, col4, col5 = st.columns(5)
             with col1:
                 st.metric("Prediction Period Days", f"{len(rolling_df)}")
             with col2:
@@ -407,7 +417,7 @@ elif page == "🧪 Model Validation":
                 st.metric("99% VaR Breakthrough Count", f"{rolling_break_99}")
             with col4:
                 st.metric("99% VaR Breakthrough Rate", f"{rolling_break_99_rate*100:.2f}% ")
-            with col5:  
+            with col5:
                 st.metric("Rolling Prediction MAE (Volatility)", f"{rolling_mae:.6f}")
 
 # 4. Prediction page
@@ -455,6 +465,3 @@ elif page == "🔮 Prediction":
         - With 99% confidence (extreme risk): Maximum expected loss = **{var_99*100:.2f}%**
         - t-Distribution VaR accounts for crypto's fat tail (more conservative)
         """)
-
-
-
