@@ -299,15 +299,20 @@ elif page == "🧪 Model Validation":
         # ========== GARCH Model Parameters & Full Volatility Comparison ==========
         st.subheader("📊 GARCH Model Parameters & Volatility Comparison")
         # Display GARCH model parameters
+                # Display GARCH model parameters with explanations
         param_col1, param_col2, param_col3, param_col4 = st.columns(4)
         with param_col1:
             st.metric("Omega (Constant)", f"{garch_params['omega']:.6f}")
+            st.caption("Constant term in variance equation, baseline volatility level.")
         with param_col2:
             st.metric("Alpha (ARCH Term)", f"{garch_params['alpha']:.4f}")
+            st.caption("Impact of recent return shock on short-term volatility.")
         with param_col3:
             st.metric("Beta (GARCH Term)", f"{garch_params['beta']:.4f}")
+            st.caption("Persistence of past volatility on current volatility.")
         with param_col4:
             st.metric("Long-Term Volatility", f"{garch_params['long_term_vol']*100:.2f}%")
+            st.caption("Unconditional long-run volatility level of the asset.")
 
         # Plot GARCH volatility vs raw rolling volatility
         fig_vol, ax_vol = plt.subplots(figsize=(15, 6))
@@ -465,3 +470,4 @@ elif page == "🔮 Prediction":
         - With 99% confidence (extreme risk): Maximum expected loss = **{var_99*100:.2f}%**
         - t-Distribution VaR accounts for crypto's fat tail (more conservative)
         """)
+
