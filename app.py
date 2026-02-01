@@ -292,6 +292,32 @@ elif page == "🧪 Model Validation":
         var_99 = st.session_state.var_99
         
         # Dynamic VaR Risk Analysis
+        # ========== GARCH Model Parameters & Full Volatility Comparison ==========
+        st.subheader("📊 GARCH Model Parameters & Volatility Comparison")
+        # 展示拟合的GARCH模型参数
+        garch_params = st.session_state.garch_params
+        param_col1, param_col2, param_col3, param_col4 = st.columns(4)
+        with param_col1:
+            st.metric("Omega (Constant)", f"{garch_params['omega']:.6f}")
+        with param_col2:
+            st.metric("Alpha (ARCH Term)", f"{garch_params['alpha']:.4f}")
+        with param_col3:
+            st.metric("Beta (GARCH Term)", f"{garch_params['beta']:.4f}")
+        with param_col4:
+            st.metric("Long-Term Volatility", f"{garch_params['long_term_vol']*100:.2f}%")
+        
+        fig_vol = plt.subplots(figsize=(15, 6))[1]
+        fig_vol.plot(df['date'], df['cond_vol'], color="royalblue", linewidth=1.2, label="GARCH(1,1) Volatility")
+        fig_vol.plot(df['date'], df['simple_vol'], color="orange", linewidth=1.2, alpha=0.7, label="21-Day Rolling Volatility")
+        fig_vol.set_xlabel("Date")
+        fig_vol.set_ylabel("Volatility (Decimal)")
+        fig_vol.set_title(f"{selected_asset} GARCH Volatility vs Raw Rolling Volatility")
+        fig_vol.legend()
+        fig_vol.grid(alpha=0.3)
+        st.pyplot(fig_vol)
+        mae_full = np.mean(np.abs(df['cond_vol'] - df['simple_vol']))
+        st.metric("Full Sample Volatility MAE (GARCH vs Raw)", f"{mae_full:.6f}")
+        st.divider()
         st.subheader("🛡️ Dynamic VaR Risk Analysis")
         # Calculate breakthrough rates
         break_95_count = df['break_95'].sum()
@@ -365,14 +391,14 @@ elif page == "🧪 Model Validation":
             
             plt.tight_layout()
             st.pyplot(fig)
-            
-            # Rolling prediction stats
+
             rolling_break_95 = (rolling_df['actual_loss'] > rolling_df['pred_var_95']).sum()
             rolling_break_95_rate = rolling_break_95 / len(rolling_df)
             rolling_break_99 = (rolling_df['actual_loss'] > rolling_df['pred_var_99']).sum()
             rolling_break_99_rate = rolling_break_99 / len(rolling_df)
-            
-            col1, col2, col3, col4 = st.columns(4)
+            rolling_mae = np.mean(np.abs(rolling_df['pred_vol'] - rolling_df['actual_vol']))
+
+            col1, col2, col3, col4, col5 = st.columns(5)  # 改这里：4→5
             with col1:
                 st.metric("Prediction Period Days", f"{len(rolling_df)}")
             with col2:
@@ -381,6 +407,8 @@ elif page == "🧪 Model Validation":
                 st.metric("99% VaR Breakthrough Count", f"{rolling_break_99}")
             with col4:
                 st.metric("99% VaR Breakthrough Rate", f"{rolling_break_99_rate*100:.2f}% ")
+            with col5:  
+                st.metric("Rolling Prediction MAE (Volatility)", f"{rolling_mae:.6f}")
 
 # 4. Prediction page
 elif page == "🔮 Prediction":
@@ -427,5 +455,6 @@ elif page == "🔮 Prediction":
         - With 99% confidence (extreme risk): Maximum expected loss = **{var_99*100:.2f}%**
         - t-Distribution VaR accounts for crypto's fat tail (more conservative)
         """)
+
 
 
