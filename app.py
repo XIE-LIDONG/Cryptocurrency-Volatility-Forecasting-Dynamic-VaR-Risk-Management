@@ -429,10 +429,10 @@ elif page == "🧪 Model Validation":
             col5, col6 = st.columns(2)
             with col5:
                 st.metric("Rolling Prediction MAE", f"{rolling_mae:.6f}")
-                st.caption("MAE between predicted volatility (rolling window) and actual GARCH volatility. Smaller = better prediction.")
+                st.caption("MAE between predicted volatility (rolling window) and actual GARCH volatility.")
             with col6:
                 st.metric("Full Sample MAE", f"{full_mae_rolling:.6f}")
-                st.caption("MAE between GARCH volatility and raw 21-day rolling volatility. Smaller = better fitting.")
+                st.caption("MAE between GARCH volatility and raw 21-day rolling volatility. ")
 # 4. Prediction page
 elif page == "🔮 Prediction":
     st.title("🔮 Next-Day Prediction")
@@ -478,6 +478,7 @@ elif page == "🔮 Prediction":
         - With 99% confidence (extreme risk): Maximum expected loss = **{var_99*100:.2f}%**
         - t-Distribution VaR accounts for crypto's fat tail (more conservative)
         """)
+
 
 
 
