@@ -9,703 +9,220 @@ import warnings
 from datetime import datetime, timedelta
 warnings.filterwarnings('ignore')
 
-# ====================== 全局设置 ======================
-st.set_page_config(
-    page_title="Crypto Volatility & VaR Dashboard",
-    page_icon="📈",
-    layout="wide"
-)
-
-# 绘图设置
-plt.style.use('default')
+# 全局设置
+st.set_page_config(page_title="Crypto Volatility Dashboard", page_icon="📈", layout="wide")
 plt.rcParams['font.family'] = 'DejaVu Sans'
 plt.rcParams['axes.unicode_minus'] = False
 
-# ====================== 核心修复：安全初始化Session State ======================
-# 定义常量
-ASSET_OPTIONS = ["Bitcoin (BTC)", "Ethereum (ETH)"]
-DEFAULT_ASSET = "Bitcoin (BTC)"
+# 初始化session state（极简）
+if 'selected_asset' not in st.session_state:
+    st.session_state.selected_asset = "Bitcoin (BTC)"
+if 'var_dist' not in st.session_state:
+    st.session_state.var_dist = "Normal Distribution"
 
-# 安全初始化所有session state
-def init_session_state():
-    session_defaults = {
-        'df': None,
-        'garch_params': None,
-        'ewma_vol': None,
-        'ewma_var_95': None,
-        'ewma_var_99': None,
-        'var_dist': "Normal Distribution",
-        'selected_asset': DEFAULT_ASSET,
-        'var_95': None,
-        'var_99': None,
-        'cond_vol': None
-    }
-    for key, default in session_defaults.items():
-        if key not in st.session_state:
-            st.session_state[key] = default
-        # 额外校验selected_asset的合法性
-        if key == 'selected_asset' and st.session_state[key] not in ASSET_OPTIONS:
-            st.session_state[key] = DEFAULT_ASSET
-
-# 执行初始化
-init_session_state()
-
-# ====================== 核心函数 ======================
-@st.cache_data(ttl=3600)
+# 核心函数（仅保留必要逻辑）
 def get_crypto_data(asset, start_date, end_date):
-    """拉取加密货币数据"""
     ticker_map = {"Bitcoin (BTC)": "BTC-USD", "Ethereum (ETH)": "ETH-USD"}
     df = yf.download(ticker_map[asset], start=start_date, end=end_date)
-    if df.empty:
-        st.error("❌ 未获取到数据，请检查日期范围！")
+    if df.empty or len(df) < 50:
         return None
-    
-    # 核心数据处理
     df = df[['Close']].copy()
     df['returns'] = df['Close'].pct_change()
     df['log_returns'] = np.log(df['Close'] / df['Close'].shift(1))
     df['simple_vol'] = df['returns'].rolling(window=21).std()
+    df['loss'] = -df['returns']  # 提前计算loss
     df = df.dropna()
-    
-    # 提前计算loss列
-    df['loss'] = -df['returns']
-    
-    if len(df) < 50:
-        st.error(f"❌ 有效数据仅{len(df)}天，至少需要50天！")
-        return None
-    
     df.reset_index(inplace=True)
     df.rename(columns={'Date': 'date'}, inplace=True)
     return df
 
 def fit_garch_model(returns):
-    """拟合GARCH模型"""
     try:
         am = arch_model(returns * 100, mean='Zero', vol='GARCH', p=1, q=1)
         res = am.fit(disp='off')
-        params = {
-            'omega': res.params['omega'] / 10000,
-            'alpha': res.params['alpha[1]'],
-            'beta': res.params['beta[1]'],
-            'alpha_beta': res.params['alpha[1]'] + res.params['beta[1]'],
-            'long_term_vol': np.sqrt(res.params['omega'] / (1 - res.params['alpha[1]'] - res.params['beta[1]'])) / 100
-        }
-        cond_vol = res.conditional_volatility / 100
-        return cond_vol, params
-    except Exception as e:
-        st.error(f"❌ GARCH拟合失败：{str(e)}")
+        params = {'omega': res.params['omega']/10000, 'alpha': res.params['alpha[1]'], 'beta': res.params['beta[1]']}
+        return res.conditional_volatility / 100, params
+    except:
         return None, None
 
-def calculate_ewma_vol(returns, lambda_=0.94):
-    """计算EWMA波动率"""
+def calculate_ewma_vol(returns):
     if len(returns) < 21:
-        st.error("❌ EWMA计算需要至少21天数据！")
         return pd.Series()
-    
     initial_vol = returns.iloc[:21].std()
     vol_list = []
     for i in range(21, len(returns)):
         prev_vol_sq = initial_vol**2 if i == 21 else vol_list[-1]**2
-        curr_return_sq = returns.iloc[i-1]**2
-        ewma_vol_sq = lambda_ * prev_vol_sq + (1 - lambda_) * curr_return_sq
-        vol_list.append(np.sqrt(ewma_vol_sq))
-    
-    ewma_vol = pd.Series(
-        [np.nan]*21 + vol_list,
-        index=returns.index[:len([np.nan]*21 + vol_list)]
-    )
-    return ewma_vol.dropna()
+        vol_list.append(np.sqrt(0.94 * prev_vol_sq + 0.06 * returns.iloc[i-1]**2))
+    return pd.Series([np.nan]*21 + vol_list, index=returns.index)
 
 def calculate_var(cond_vol, dist_type="Normal"):
-    """计算VaR"""
     if cond_vol is None or len(cond_vol) == 0:
         return None, None
-    
-    var_95_normal = 1.65 * cond_vol
-    var_99_normal = 2.33 * cond_vol
-    
-    t_95 = abs(t.ppf(0.05, df=8))
-    t_99 = abs(t.ppf(0.01, df=8))
-    var_95_t = t_95 * cond_vol
-    var_99_t = t_99 * cond_vol
-    
-    return (var_95_normal, var_99_normal) if dist_type == "Normal" else (var_95_t, var_99_t)
-
-def predict_next_vol_var(returns, params, last_vol, model_type="GARCH"):
-    """预测次日波动率和VaR"""
-    if last_vol is None or pd.isna(last_vol):
-        return None, None, None, None, None
-    
-    last_residual = returns.iloc[-1] if len(returns) > 0 else 0
-    
-    if model_type == "GARCH":
-        if not params:
-            return None, None, None, None, None
-        next_vol_sq = params['omega'] + params['alpha'] * last_residual**2 + params['beta'] * last_vol**2
-        next_vol = np.sqrt(next_vol_sq)
-    else:  # EWMA
-        next_vol_sq = 0.94 * last_vol**2 + 0.06 * last_residual**2
-        next_vol = np.sqrt(next_vol_sq)
-    
-    var_95 = 1.65 * next_vol
-    var_99 = 2.33 * next_vol
-    t_95 = abs(t.ppf(0.05, df=8))
-    t_99 = abs(t.ppf(0.01, df=8))
-    var_95_t = t_95 * next_vol
-    var_99_t = t_99 * next_vol
-    
-    return next_vol, var_95, var_99, var_95_t, var_99_t
+    if dist_type == "Normal":
+        return 1.65 * cond_vol, 2.33 * cond_vol
+    else:
+        return abs(t.ppf(0.05, 8)) * cond_vol, abs(t.ppf(0.01, 8)) * cond_vol
 
 def rolling_window_prediction(df, window_size, model_type="GARCH"):
-    """滚动预测"""
-    if window_size < 21:
-        window_size = 21  # 最小窗口限制
-    
+    window_size = max(window_size, 21)
     rolling_vol, rolling_var_95, rolling_var_99 = [], [], []
     actual_vol, actual_loss, dates = [], [], []
-    
     for i in range(window_size, len(df)):
-        train_returns = df['returns'].iloc[i-window_size:i]
-        
+        train_ret = df['returns'].iloc[i-window_size:i]
         if model_type == "GARCH":
-            am = arch_model(train_returns * 100, mean='Zero', vol='GARCH', p=1, q=1)
+            am = arch_model(train_ret*100, mean='Zero', vol='GARCH', p=1, q=1)
             res = am.fit(disp='off')
-            params = {'omega': res.params['omega']/10000, 'alpha': res.params['alpha[1]'], 'beta': res.params['beta[1]']}
-            last_vol = res.conditional_volatility.iloc[-1] / 100
-            next_vol_sq = params['omega'] + params['alpha'] * train_returns.iloc[-1]**2 + params['beta'] * last_vol**2
-            next_vol = np.sqrt(next_vol_sq)
-        else:  # EWMA
-            ewma_vol_train = calculate_ewma_vol(train_returns)
-            last_vol = ewma_vol_train.iloc[-1] if len(ewma_vol_train) > 0 else train_returns.std()
-            next_vol_sq = 0.94 * last_vol**2 + 0.06 * train_returns.iloc[-1]**2
-            next_vol = np.sqrt(next_vol_sq)
-        
-        var_95 = 1.65 * next_vol
-        var_99 = 2.33 * next_vol
-        
+            last_vol = res.conditional_volatility.iloc[-1]/100
+            next_vol = np.sqrt(res.params['omega']/10000 + res.params['alpha[1]']*train_ret.iloc[-1]**2 + res.params['beta[1]']*last_vol**2)
+        else:
+            ewma_vol = calculate_ewma_vol(train_ret)
+            last_vol = ewma_vol.dropna().iloc[-1] if len(ewma_vol.dropna()) > 0 else train_ret.std()
+            next_vol = np.sqrt(0.94 * last_vol**2 + 0.06 * train_ret.iloc[-1]**2)
         rolling_vol.append(next_vol)
-        rolling_var_95.append(var_95)
-        rolling_var_99.append(var_99)
-        actual_vol.append(df['cond_vol'].iloc[i] if model_type == "GARCH" else df['simple_vol'].iloc[i])
+        rolling_var_95.append(1.65 * next_vol)
+        rolling_var_99.append(2.33 * next_vol)
+        actual_vol.append(df['cond_vol'].iloc[i] if model_type=="GARCH" else df['simple_vol'].iloc[i])
         actual_loss.append(df['loss'].iloc[i])
         dates.append(df['date'].iloc[i])
-    
-    return pd.DataFrame({
-        'date': dates, 'pred_vol': rolling_vol, 'pred_var_95': rolling_var_95,
-        'pred_var_99': rolling_var_99, 'actual_vol': actual_vol, 'actual_loss': actual_loss
-    })
+    return pd.DataFrame({'date':dates, 'pred_vol':rolling_vol, 'pred_var_95':rolling_var_95, 
+                         'pred_var_99':rolling_var_99, 'actual_vol':actual_vol, 'actual_loss':actual_loss})
 
-# ====================== 导航栏 ======================
-st.sidebar.title("📑 Navigation")
-page = st.sidebar.radio(
-    "Select Function",
-    ["🏠 Home", "📊 Data Visualization", "🧪 GARCH Model Validation", 
-     "📊 EWMA Model Validation", "🔍 Model Comparison", "🔮 Prediction"]
-)
+# 导航栏
+page = st.sidebar.radio("Select Page", ["Home", "GARCH Validation", "EWMA Validation", "Comparison", "Prediction"])
 
-# ====================== 页面逻辑 ======================
-# 1. Home页（核心修复：安全获取selected_asset索引）
-if page == "🏠 Home":
-    st.markdown(
-        """
-        <div style='display: flex; justify-content: flex-end; align-items: center;'>
-            <p style='color: #666666; font-size: 14px; margin: 0;'>By XIE LI DONG</p>
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
-    st.title("📈 Crypto Volatility & VaR Dashboard")
-    st.subheader("Real-Time GARCH/EWMA Modeling & Risk Analysis for BTC/ETH")
-    st.divider()
-    
-    # 核心修复：安全获取索引（避免ValueError）
-    current_asset = st.session_state.selected_asset
-    try:
-        asset_index = ASSET_OPTIONS.index(current_asset)
-    except ValueError:
-        asset_index = 0  # 兜底用默认值
-    
-    # 选择区
-    col1, col2, col3 = st.columns([1.5, 2, 1.5])
+# Home页（核心修复点）
+if page == "Home":
+    st.title("Crypto Volatility & VaR Dashboard")
+    col1, col2, col3 = st.columns([1.5,2,1.5])
     with col1:
-        selected_asset = st.selectbox(
-            "Select Cryptocurrency", 
-            ASSET_OPTIONS,  # 使用常量列表
-            index=asset_index  # 使用安全获取的索引
-        )
+        selected_asset = st.selectbox("Crypto", ["Bitcoin (BTC)", "Ethereum (ETH)"], 
+                                     index=["Bitcoin (BTC)", "Ethereum (ETH)"].index(st.session_state.selected_asset))
         st.session_state.selected_asset = selected_asset
     with col2:
-        min_start = pd.Timestamp("2017-01-01").date()
-        max_end = pd.Timestamp.now().date()
-        default_start = pd.Timestamp.now() - pd.DateOffset(years=3)
-        date_range = st.date_input(
-            "Select Date Range",
-            value=[default_start.date(), max_end],
-            min_value=min_start, max_value=max_end
-        )
+        min_date = pd.Timestamp("2017-01-01").date()
+        max_date = pd.Timestamp.now().date()
+        date_range = st.date_input("Date Range", [pd.Timestamp.now()-pd.DateOffset(years=3), max_date], min_date, max_date)
     with col3:
-        var_dist = st.radio(
-            "VaR Distribution Type",
-            ["Normal Distribution", "t-Distribution (Fat Tail)"],
-            horizontal=True,
-            # 安全设置默认值
-            index=0 if st.session_state.var_dist == "Normal Distribution" else 1
-        )
+        var_dist = st.radio("VaR Distribution", ["Normal Distribution", "t-Distribution"], horizontal=True,
+                           index=0 if st.session_state.var_dist=="Normal Distribution" else 1)
         st.session_state.var_dist = var_dist
-    
-    # 运行分析
-    if st.button("🔄 Run Analysis (Pull Data + Fit Models + Calculate VaR)", type="primary"):
-        # 校验日期范围
-        if len(date_range) != 2:
-            st.error("❌ 请选择完整的日期范围（起始+结束）！")
-            st.stop()
-        
-        with st.spinner("Processing... (10-20 seconds)"):
-            # 1. 拉取数据
+
+    if st.button("Run Analysis"):
+        with st.spinner("Processing..."):
             df = get_crypto_data(selected_asset, date_range[0], date_range[1])
             if df is None:
+                st.error("No valid data!")
                 st.stop()
-            st.session_state.df = df
-            st.success(f"✅ 成功拉取 {len(df)} 天 {selected_asset} 数据")
             
-            # 2. 拟合GARCH
+            # GARCH
             cond_vol, garch_params = fit_garch_model(df['returns'])
             if cond_vol is None:
+                st.error("GARCH fit failed!")
                 st.stop()
-            st.session_state.cond_vol = cond_vol
-            st.session_state.garch_params = garch_params
-            df['cond_vol'] = cond_vol.values
-            st.success("✅ GARCH模型拟合完成")
-            
-            # 3. GARCH VaR
-            var_dist_type = var_dist.split(' ')[0]
-            var_95, var_99 = calculate_var(cond_vol, var_dist_type)
-            if var_95 is None:
-                st.stop()
-            st.session_state.var_95 = var_95
-            st.session_state.var_99 = var_99
+            df['cond_vol'] = cond_vol
+            var_95, var_99 = calculate_var(cond_vol, var_dist.split(' ')[0])
             df['var_95'] = var_95
             df['var_99'] = var_99
             df['break_95'] = df['loss'] > df['var_95']
             df['break_99'] = df['loss'] > df['var_99']
             
-            # 4. EWMA计算
+            # EWMA（核心修复：统一索引长度）
             ewma_vol = calculate_ewma_vol(df['returns'])
-            if len(ewma_vol) == 0:
-                st.stop()
-            st.session_state.ewma_vol = ewma_vol
+            df['ewma_vol'] = ewma_vol
+            ewma_var_95, ewma_var_99 = calculate_var(ewma_vol.dropna(), var_dist.split(' ')[0])
             
-            # 对齐EWMA数据
-            ewma_index = ewma_vol.index
-            df['ewma_vol'] = np.nan
-            df.loc[ewma_index, 'ewma_vol'] = ewma_vol.values
-            
-            # 5. EWMA VaR
-            ewma_var_95, ewma_var_99 = calculate_var(ewma_vol, var_dist_type)
-            if ewma_var_95 is None:
-                st.stop()
-            st.session_state.ewma_var_95 = ewma_var_95
-            st.session_state.ewma_var_99 = ewma_var_99
+            # 修复赋值逻辑：先创建等长数组，再赋值
             df['ewma_var_95'] = np.nan
             df['ewma_var_99'] = np.nan
-            df.loc[ewma_index, 'ewma_var_95'] = ewma_var_95.values
-            df.loc[ewma_index, 'ewma_var_99'] = ewma_var_99.values
+            valid_ewma_idx = ewma_vol.dropna().index  # 只取非空的EWMA索引
+            df.loc[valid_ewma_idx, 'ewma_var_95'] = ewma_var_95.values  # 用.values保证一维数组
+            df.loc[valid_ewma_idx, 'ewma_var_99'] = ewma_var_99.values
             
-            # 6. EWMA击穿率
+            # 关键修复：确保比较结果是一维数组，长度匹配
             df['ewma_break_95'] = np.nan
             df['ewma_break_99'] = np.nan
-            df.loc[ewma_index, 'ewma_break_95'] = df.loc[ewma_index, 'loss'] > df.loc[ewma_index, 'ewma_var_95']
-            df.loc[ewma_index, 'ewma_break_99'] = df.loc[ewma_index, 'loss'] > df.loc[ewma_index, 'ewma_var_99']
+            # 先计算布尔值，转为numpy数组保证长度匹配
+            break_95_vals = (df.loc[valid_ewma_idx, 'loss'] > df.loc[valid_ewma_idx, 'ewma_var_95']).values
+            break_99_vals = (df.loc[valid_ewma_idx, 'loss'] > df.loc[valid_ewma_idx, 'ewma_var_99']).values
+            # 赋值
+            df.loc[valid_ewma_idx, 'ewma_break_95'] = break_95_vals
+            df.loc[valid_ewma_idx, 'ewma_break_99'] = break_99_vals
             
             st.session_state.df = df
-            st.success("✅ EWMA计算完成")
-            st.info("✅ 所有计算完成！可切换到其他页面查看结果")
+            st.success("Analysis completed!")
 
-# 2. 数据可视化页
-elif page == "📊 Data Visualization":
-    st.title("📊 Data Visualization")
-    st.divider()
-    df = st.session_state.df
+# GARCH Validation
+elif page == "GARCH Validation":
+    st.title("GARCH Model Validation")
+    df = st.session_state.get('df')
     if df is None:
-        st.warning("⚠️ 请先在Home页运行分析！")
-    else:
-        fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(15, 12), sharex=True)
-        
-        # 价格图
-        ax1.plot(df['date'], df['Close'], color="darkblue", linewidth=1.2)
-        ax1.set_ylabel("Closing Price (USD)")
-        ax1.set_title(f"{st.session_state.selected_asset} Historical Price")
-        ax1.grid(alpha=0.3)
-        
-        # 对数收益率图
-        ax2.plot(df['date'], df['log_returns'], color="green", alpha=0.7)
-        ax2.axhline(y=0, color="black", linestyle="--", alpha=0.5)
-        ax2.set_ylabel("Log Returns (Decimal)")
-        ax2.set_title(f"{st.session_state.selected_asset} Log Returns")
-        ax2.grid(alpha=0.3)
-        
-        # 原始波动率图
-        ax3.plot(df['date'], df['simple_vol'], color="orange", linewidth=1.2)
-        ax3.set_xlabel("Date")
-        ax3.set_ylabel("21-Day Rolling Volatility (Decimal)")
-        ax3.set_title(f"{st.session_state.selected_asset} Raw Volatility")
-        ax3.grid(alpha=0.3)
-        
-        plt.tight_layout()
-        st.pyplot(fig)
+        st.warning("Run analysis first!")
+        return
+    # 极简绘图
+    fig, ax = plt.subplots(figsize=(15,7))
+    ax.plot(df['date'], df['returns'], 'gray', alpha=0.5, label='Returns')
+    ax.plot(df['date'], -df['var_95'], 'red', label='95% VaR')
+    ax.plot(df['date'], -df['var_99'], 'darkred', label='99% VaR')
+    ax.legend()
+    st.pyplot(fig)
+    # 滚动预测
+    rolling_df = rolling_window_prediction(df, int(len(df)/3), "GARCH")
+    fig, ax = plt.subplots(figsize=(15,7))
+    ax.plot(rolling_df['date'], rolling_df['pred_vol'], 'blue', label='Pred Vol')
+    ax.plot(rolling_df['date'], rolling_df['actual_vol'], 'green', label='Actual Vol')
+    ax.legend()
+    st.pyplot(fig)
 
-# 3. GARCH模型验证页
-elif page == "🧪 GARCH Model Validation":
-    st.title("🧪 GARCH Model Validation")
-    st.divider()
-    df = st.session_state.df
+# EWMA Validation
+elif page == "EWMA Validation":
+    st.title("EWMA Model Validation")
+    df = st.session_state.get('df')
     if df is None:
-        st.warning("⚠️ 请先在Home页运行分析！")
-    else:
-        var_dist = st.session_state.var_dist
-        break_95_count = df['break_95'].sum()
-        break_95_rate = break_95_count / len(df)
-        break_99_count = df['break_99'].sum()
-        break_99_rate = break_99_count / len(df)
-        
-        # VaR图
-        fig, ax = plt.subplots(figsize=(15, 7))
-        ax.plot(df['date'], df['returns'], color="gray", alpha=0.5, label="Daily Returns")
-        ax.axhline(y=0, color="black", linestyle="--", alpha=0.5)
-        ax.plot(df['date'], -df['var_95'], color="red", linewidth=1.5, label=f"95% {var_dist} VaR")
-        ax.plot(df['date'], -df['var_99'], color="darkred", linewidth=1.5, label=f"99% {var_dist} VaR")
-        
-        break_95_df = df[df['break_95']]
-        ax.scatter(break_95_df['date'], break_95_df['returns'], color="red", s=20, label="95% VaR Breakthrough", zorder=5)
-        break_99_df = df[df['break_99']]
-        ax.scatter(break_99_df['date'], break_99_df['returns'], color="darkred", s=30, label="99% VaR Breakthrough", zorder=6)
-        
-        ax.set_xlabel("Date")
-        ax.set_ylabel("Returns (Decimal)")
-        ax.set_title(f"{st.session_state.selected_asset} Returns vs GARCH Dynamic VaR ({var_dist})")
-        ax.legend()
-        ax.grid(alpha=0.3)
-        st.pyplot(fig)
-        
-        # VaR回测结果
-        col1, col2, col3, col4 = st.columns(4)
-        with col1:
-            st.metric("95% VaR Breakthrough Count", f"{break_95_count}")
-        with col2:
-            st.metric("95% VaR Breakthrough Rate", f"{break_95_rate*100:.2f}% ")
-        with col3:
-            st.metric("99% VaR Breakthrough Count", f"{break_99_count}")
-        with col4:
-            st.metric("99% VaR Breakthrough Rate", f"{break_99_rate*100:.2f}% ")
-        
-        # 滚动预测
-        st.divider()
-        st.subheader("🎯 GARCH Rolling Window Prediction")
-        window_size = max(int(len(df)/3), 21)
-        st.info(f"🔍 Auto-set window size: {window_size} days (1/3 of total data: {len(df)} days)")
-        
-        with st.spinner("Running GARCH rolling prediction... (This may take 1-2 minutes)"):
-            rolling_df = rolling_window_prediction(df, window_size, model_type="GARCH")
-            
-            # 绘制滚动预测图
-            fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(15, 12), sharex=True)
-            
-            # 波动率对比
-            ax1.plot(rolling_df['date'], rolling_df['pred_vol'], color="blue", linewidth=1.5, label="Predicted Volatility")
-            ax1.plot(rolling_df['date'], rolling_df['actual_vol'], color="green", linewidth=1.5, alpha=0.7, label="Actual GARCH Volatility")
-            start_pred_date = rolling_df['date'].iloc[0]
-            ax1.axvline(x=start_pred_date, color="red", linestyle="--", label="Prediction Start Date")
-            ax1.set_ylabel("Volatility (Decimal)")
-            ax1.set_title(f"{st.session_state.selected_asset} GARCH Rolling Prediction: Volatility")
-            ax1.legend()
-            ax1.grid(alpha=0.3)
-            
-            # VaR对比
-            ax2.plot(rolling_df['date'], rolling_df['pred_var_95'], color="red", linewidth=1.5, label="Predicted 95% VaR")
-            ax2.plot(rolling_df['date'], rolling_df['pred_var_99'], color="darkred", linewidth=1.5, label="Predicted 99% VaR")
-            ax2.plot(rolling_df['date'], rolling_df['actual_loss'], color="gray", alpha=0.7, label="Actual Loss")
-            ax2.axvline(x=start_pred_date, color="red", linestyle="--")
-            ax2.set_xlabel("Date")
-            ax2.set_ylabel("Loss / VaR (Decimal)")
-            ax2.set_title(f"{st.session_state.selected_asset} GARCH Rolling Prediction: VaR vs Actual Loss")
-            ax2.legend()
-            ax2.grid(alpha=0.3)
-            
-            plt.tight_layout()
-            st.pyplot(fig)
-            
-            # 滚动预测结果统计
-            rolling_break_95 = (rolling_df['actual_loss'] > rolling_df['pred_var_95']).sum()
-            rolling_break_95_rate = rolling_break_95 / len(rolling_df)
-            rolling_break_99 = (rolling_df['actual_loss'] > rolling_df['pred_var_99']).sum()
-            rolling_break_99_rate = rolling_break_99 / len(rolling_df)
-            
-            col1, col2, col3, col4 = st.columns(4)
-            with col1:
-                st.metric("Prediction Period Days", f"{len(rolling_df)}")
-            with col2:
-                st.metric("95% VaR Breakthrough Rate", f"{rolling_break_95_rate*100:.2f}% ")
-            with col3:
-                st.metric("99% VaR Breakthrough Count", f"{rolling_break_99}")
-            with col4:
-                st.metric("99% VaR Breakthrough Rate", f"{rolling_break_99_rate*100:.2f}% ")
+        st.warning("Run analysis first!")
+        return
+    df_ewma = df.dropna(subset=['ewma_vol'])
+    fig, ax = plt.subplots(figsize=(15,7))
+    ax.plot(df_ewma['date'], df_ewma['returns'], 'gray', alpha=0.5, label='Returns')
+    ax.plot(df_ewma['date'], -df_ewma['ewma_var_95'], 'orange', label='95% VaR')
+    ax.plot(df_ewma['date'], -df_ewma['ewma_var_99'], 'darkorange', label='99% VaR')
+    ax.legend()
+    st.pyplot(fig)
+    # 滚动预测
+    rolling_df = rolling_window_prediction(df_ewma, int(len(df_ewma)/3), "EWMA")
+    fig, ax = plt.subplots(figsize=(15,7))
+    ax.plot(rolling_df['date'], rolling_df['pred_vol'], 'orange', label='Pred Vol')
+    ax.plot(rolling_df['date'], rolling_df['actual_vol'], 'green', label='Actual Vol')
+    ax.legend()
+    st.pyplot(fig)
 
-# 4. EWMA模型验证页
-elif page == "📊 EWMA Model Validation":
-    st.title("📊 EWMA Model Validation")
-    st.divider()
-    df = st.session_state.df
-    if df is None or st.session_state.ewma_vol is None:
-        st.warning("⚠️ 请先在Home页运行分析！")
-    else:
-        # 筛选有效EWMA数据
-        df_ewma = df.dropna(subset=['ewma_vol']).copy()
-        if len(df_ewma) == 0:
-            st.error("❌ 无有效EWMA数据！")
-            st.stop()
-        
-        var_dist = st.session_state.var_dist
-        break_95_count = df_ewma['ewma_break_95'].sum()
-        break_95_rate = break_95_count / len(df_ewma)
-        break_99_count = df_ewma['ewma_break_99'].sum()
-        break_99_rate = break_99_count / len(df_ewma)
-        
-        # 绘制EWMA VaR图
-        fig, ax = plt.subplots(figsize=(15, 7))
-        ax.plot(df_ewma['date'], df_ewma['returns'], color="gray", alpha=0.5, label="Daily Returns")
-        ax.axhline(y=0, color="black", linestyle="--", alpha=0.5)
-        ax.plot(df_ewma['date'], -df_ewma['ewma_var_95'], color="orange", linewidth=1.5, label=f"95% {var_dist} VaR (Max Loss)")
-        ax.plot(df_ewma['date'], -df_ewma['ewma_var_99'], color="darkorange", linewidth=1.5, label=f"99% {var_dist} VaR (Max Loss)")
-        
-        break_95_df = df_ewma[df_ewma['ewma_break_95']]
-        ax.scatter(break_95_df['date'], break_95_df['returns'], color="orange", s=20, label="95% VaR Breakthrough", zorder=5)
-        break_99_df = df_ewma[df_ewma['ewma_break_99']]
-        ax.scatter(break_99_df['date'], break_99_df['returns'], color="darkorange", s=30, label="99% VaR Breakthrough", zorder=6)
-        
-        ax.set_xlabel("Date")
-        ax.set_ylabel("Returns (Decimal)")
-        ax.set_title(f"{st.session_state.selected_asset} Returns vs EWMA Dynamic VaR ({var_dist})")
-        ax.legend()
-        ax.grid(alpha=0.3)
-        st.pyplot(fig)
-        
-        # EWMA VaR回测结果
-        col1, col2, col3, col4 = st.columns(4)
-        with col1:
-            st.metric("95% VaR Breakthrough Count", f"{break_95_count}")
-        with col2:
-            st.metric("95% VaR Breakthrough Rate", f"{break_95_rate*100:.2f}% ")
-        with col3:
-            st.metric("99% VaR Breakthrough Count", f"{break_99_count}")
-        with col4:
-            st.metric("99% VaR Breakthrough Rate", f"{break_99_rate*100:.2f}% ")
-        
-        # EWMA滚动预测
-        st.divider()
-        st.subheader("🎯 EWMA Rolling Window Prediction")
-        window_size = max(int(len(df_ewma)/3), 21)
-        st.info(f"🔍 Auto-set window size: {window_size} days (1/3 of total EWMA data: {len(df_ewma)} days)")
-        
-        with st.spinner("Running EWMA rolling prediction... (This may take 1-2 minutes)"):
-            rolling_df = rolling_window_prediction(df_ewma, window_size, model_type="EWMA")
-            
-            # 绘制EWMA滚动预测图
-            fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(15, 12), sharex=True)
-            
-            # EWMA波动率对比
-            ax1.plot(rolling_df['date'], rolling_df['pred_vol'], color="orange", linewidth=1.5, label="Predicted EWMA Volatility")
-            ax1.plot(rolling_df['date'], rolling_df['actual_vol'], color="green", linewidth=1.5, alpha=0.7, label="Actual Rolling Volatility")
-            start_pred_date = rolling_df['date'].iloc[0]
-            ax1.axvline(x=start_pred_date, color="red", linestyle="--", label="Prediction Start Date")
-            ax1.set_ylabel("Volatility (Decimal)")
-            ax1.set_title(f"{st.session_state.selected_asset} EWMA Rolling Prediction: Volatility")
-            ax1.legend()
-            ax1.grid(alpha=0.3)
-            
-            # EWMA VaR对比
-            ax2.plot(rolling_df['date'], rolling_df['pred_var_95'], color="orange", linewidth=1.5, label="Predicted 95% VaR")
-            ax2.plot(rolling_df['date'], rolling_df['pred_var_99'], color="darkorange", linewidth=1.5, label="Predicted 99% VaR")
-            ax2.plot(rolling_df['date'], rolling_df['actual_loss'], color="gray", alpha=0.7, label="Actual Loss")
-            ax2.axvline(x=start_pred_date, color="red", linestyle="--")
-            ax2.set_xlabel("Date")
-            ax2.set_ylabel("Loss / VaR (Decimal)")
-            ax2.set_title(f"{st.session_state.selected_asset} EWMA Rolling Prediction: VaR vs Actual Loss")
-            ax2.legend()
-            ax2.grid(alpha=0.3)
-            
-            plt.tight_layout()
-            st.pyplot(fig)
-            
-            # EWMA滚动预测结果统计
-            rolling_break_95 = (rolling_df['actual_loss'] > rolling_df['pred_var_95']).sum()
-            rolling_break_95_rate = rolling_break_95 / len(rolling_df)
-            rolling_break_99 = (rolling_df['actual_loss'] > rolling_df['pred_var_99']).sum()
-            rolling_break_99_rate = rolling_break_99 / len(rolling_df)
-            
-            col1, col2, col3, col4 = st.columns(4)
-            with col1:
-                st.metric("Prediction Period Days", f"{len(rolling_df)}")
-            with col2:
-                st.metric("95% VaR Breakthrough Rate", f"{rolling_break_95_rate*100:.2f}% ")
-            with col3:
-                st.metric("99% VaR Breakthrough Count", f"{rolling_break_99}")
-            with col4:
-                st.metric("99% VaR Breakthrough Rate", f"{rolling_break_99_rate*100:.2f}% ")
-
-# 5. 模型对比页面
-elif page == "🔍 Model Comparison":
-    st.title("🔍 GARCH vs EWMA Model Comparison")
-    st.divider()
-    df = st.session_state.df
+# Comparison
+elif page == "Comparison":
+    st.title("GARCH vs EWMA Comparison")
+    df = st.session_state.get('df')
     if df is None:
-        st.warning("⚠️ 请先在Home页运行分析！")
-    else:
-        # 筛选同时有GARCH和EWMA数据的行
-        df_compare = df.dropna(subset=['cond_vol', 'ewma_vol']).copy()
-        if len(df_compare) == 0:
-            st.error("❌ 无足够数据进行模型对比！")
-            st.stop()
-        
-        # ========== 统计对比表格 ==========
-        st.subheader("📋 Model Performance Statistics")
-        
-        # 计算统计指标
-        stats_data = {
-            'Metric': [
-                'Average Volatility (%)',
-                '95% VaR (Avg, %)',
-                '99% VaR (Avg, %)',
-                '95% VaR Breakthrough Rate (%)',
-                '99% VaR Breakthrough Rate (%)',
-                'Volatility Std Dev (%)'
-            ],
-            'GARCH Model': [
-                f"{df_compare['cond_vol'].mean()*100:.2f}",
-                f"{df_compare['var_95'].mean()*100:.2f}",
-                f"{df_compare['var_99'].mean()*100:.2f}",
-                f"{(df_compare['break_95'].sum()/len(df_compare)*100):.2f}",
-                f"{(df_compare['break_99'].sum()/len(df_compare)*100):.2f}",
-                f"{df_compare['cond_vol'].std()*100:.2f}"
-            ],
-            'EWMA Model': [
-                f"{df_compare['ewma_vol'].mean()*100:.2f}",
-                f"{df_compare['ewma_var_95'].mean()*100:.2f}",
-                f"{df_compare['ewma_var_99'].mean()*100:.2f}",
-                f"{(df_compare['ewma_break_95'].sum()/len(df_compare)*100):.2f}",
-                f"{(df_compare['ewma_break_99'].sum()/len(df_compare)*100):.2f}",
-                f"{df_compare['ewma_vol'].std()*100:.2f}"
-            ]
-        }
-        
-        stats_df = pd.DataFrame(stats_data)
-        st.table(stats_df)
-        
-        # ========== 波动率对比图 ==========
-        st.divider()
-        st.subheader("📈 Volatility Comparison")
-        
-        fig, ax = plt.subplots(figsize=(15, 8))
-        ax.plot(df_compare['date'], df_compare['cond_vol'], color="royalblue", linewidth=1.2, label="GARCH Volatility")
-        ax.plot(df_compare['date'], df_compare['ewma_vol'], color="orange", linewidth=1.2, alpha=0.8, label="EWMA Volatility (λ=0.94)")
-        ax.set_xlabel("Date")
-        ax.set_ylabel("Volatility (Decimal)")
-        ax.set_title(f"{st.session_state.selected_asset} GARCH vs EWMA Volatility Comparison")
-        ax.legend()
-        ax.grid(alpha=0.3)
-        plt.tight_layout()
-        st.pyplot(fig)
-        
-        # ========== VaR对比图 ==========
-        st.divider()
-        st.subheader("🛡️ 95% VaR Comparison")
-        
-        fig, ax = plt.subplots(figsize=(15, 8))
-        ax.plot(df_compare['date'], -df_compare['var_95'], color="royalblue", linewidth=1.2, label="GARCH 95% VaR")
-        ax.plot(df_compare['date'], -df_compare['ewma_var_95'], color="orange", linewidth=1.2, alpha=0.8, label="EWMA 95% VaR")
-        ax.plot(df_compare['date'], df_compare['returns'], color="gray", alpha=0.5, label="Daily Returns")
-        ax.axhline(y=0, color="black", linestyle="--", alpha=0.5)
-        ax.set_xlabel("Date")
-        ax.set_ylabel("Returns / VaR (Decimal)")
-        ax.set_title(f"{st.session_state.selected_asset} GARCH vs EWMA 95% VaR Comparison ({st.session_state.var_dist})")
-        ax.legend()
-        ax.grid(alpha=0.3)
-        plt.tight_layout()
-        st.pyplot(fig)
+        st.warning("Run analysis first!")
+        return
+    df_comp = df.dropna(subset=['cond_vol', 'ewma_vol'])
+    # 波动率对比
+    fig, ax = plt.subplots(figsize=(15,7))
+    ax.plot(df_comp['date'], df_comp['cond_vol'], 'blue', label='GARCH Vol')
+    ax.plot(df_comp['date'], df_comp['ewma_vol'], 'orange', label='EWMA Vol')
+    ax.legend()
+    st.pyplot(fig)
 
-# 6. 预测页面
-elif page == "🔮 Prediction":
-    st.title("🔮 Next-Day Prediction (GARCH + EWMA)")
-    st.divider()
-    
-    # 检查数据是否加载
-    df = st.session_state.df
-    garch_params = st.session_state.garch_params
-    if df is None or garch_params is None:
-        st.warning("⚠️ Please run analysis first on the Home page!")
-    else:
-        selected_asset = st.session_state.selected_asset
-        
-        # 计算下一个交易日
-        last_date = df['date'].iloc[-1]
-        next_date = last_date + timedelta(days=1)
-        # 跳过周末（加密货币周末交易，保留逻辑兼容）
-        while next_date.weekday() >= 5:
-            next_date += timedelta(days=1)
-        next_date_str = next_date.strftime("%Y-%m-%d")
-        
-        # GARCH预测
-        last_garch_vol = df['cond_vol'].iloc[-1]
-        garch_next_vol, garch_var_95, garch_var_99, garch_var_95_t, garch_var_99_t = predict_next_vol_var(
-            df['returns'], garch_params, last_garch_vol, model_type="GARCH"
-        )
-        
-        # EWMA预测
-        last_ewma_vol = df['ewma_vol'].dropna().iloc[-1] if len(df['ewma_vol'].dropna()) > 0 else df['simple_vol'].iloc[-1]
-        ewma_next_vol, ewma_var_95, ewma_var_99, ewma_var_95_t, ewma_var_99_t = predict_next_vol_var(
-            df['returns'], {}, last_ewma_vol, model_type="EWMA"
-        )
-        
-        # 展示预测结果表格
-        st.subheader(f"📅 Prediction for Next Trading Day: {next_date_str}")
-        
-        # 预测结果数据
-        pred_data = {
-            'Metric': [
-                'Predicted Volatility (%)',
-                '95% Normal VaR (%)',
-                '99% Normal VaR (%)',
-                '95% t-VaR (Fat Tail, %)',
-                '99% t-VaR (Fat Tail, %)'
-            ],
-            'GARCH Model': [
-                f"{garch_next_vol*100:.2f}" if garch_next_vol else "N/A",
-                f"{garch_var_95*100:.2f}" if garch_var_95 else "N/A",
-                f"{garch_var_99*100:.2f}" if garch_var_99 else "N/A",
-                f"{garch_var_95_t*100:.2f}" if garch_var_95_t else "N/A",
-                f"{garch_var_99_t*100:.2f}" if garch_var_99_t else "N/A"
-            ],
-            'EWMA Model (λ=0.94)': [
-                f"{ewma_next_vol*100:.2f}" if ewma_next_vol else "N/A",
-                f"{ewma_var_95*100:.2f}" if ewma_var_95 else "N/A",
-                f"{ewma_var_99*100:.2f}" if ewma_var_99 else "N/A",
-                f"{ewma_var_95_t*100:.2f}" if ewma_var_95_t else "N/A",
-                f"{ewma_var_99_t*100:.2f}" if ewma_var_99_t else "N/A"
-            ]
-        }
-        
-        pred_df = pd.DataFrame(pred_data)
-        st.table(pred_df)
-        
-        # 预测解释
-        st.divider()
-        st.markdown(f"""
-        ### 📝 Prediction Interpretation
-        For **{selected_asset.split(' ')[0]}** on {next_date_str}:
-        - **GARCH Model**: More conservative prediction, better captures extreme risk (fat tail)
-        - **EWMA Model**: More responsive to recent volatility, better for short-term prediction
-        - t-Distribution VaR is more conservative than Normal distribution (recommended for crypto)
-        """)
-
-# 页脚
-st.markdown("---")
-st.markdown("<p style='text-align: center; color: #666; font-size: 12px;'>Crypto Volatility & VaR Dashboard | Powered by Yahoo Finance & Streamlit</p>", unsafe_allow_html=True)
+# Prediction
+elif page == "Prediction":
+    st.title("Next-Day Prediction")
+    df = st.session_state.get('df')
+    if df is None:
+        st.warning("Run analysis first!")
+        return
+    # GARCH预测
+    last_garch_vol = df['cond_vol'].iloc[-1]
+    garch_next_vol = np.sqrt(st.session_state.get('garch_params')['omega'] + st.session_state.get('garch_params')['alpha']*df['returns'].iloc[-1]**2 + st.session_state.get('garch_params')['beta']*last_garch_vol**2)
+    # EWMA预测
+    last_ewma_vol = df['ewma_vol'].dropna().iloc[-1]
+    ewma_next_vol = np.sqrt(0.94 * last_ewma_vol**2 + 0.06 * df['returns'].iloc[-1]**2)
+    # 展示
+    st.write(f"GARCH Pred Vol: {garch_next_vol*100:.2f}%")
+    st.write(f"EWMA Pred Vol: {ewma_next_vol*100:.2f}%")
