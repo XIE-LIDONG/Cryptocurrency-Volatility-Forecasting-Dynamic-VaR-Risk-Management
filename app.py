@@ -308,11 +308,11 @@ elif page == "🧪 Model Validation":
         with col1:
             st.metric("95% VaR Breakthrough Count", f"{break_95_count}")
         with col2:
-            st.metric("95% VaR Breakthrough Rate", f"{break_95_rate*100:.2f}% (5%)")
+            st.metric("95% VaR Breakthrough Rate", f"{break_95_rate*100:.2f}% ")
         with col3:
             st.metric("99% VaR Breakthrough Count", f"{break_99_count}")
         with col4:
-            st.metric("99% VaR Breakthrough Rate", f"{break_99_rate*100:.2f}% (1%)")
+            st.metric("99% VaR Breakthrough Rate", f"{break_99_rate*100:.2f}% ")
         
         # ========== 滚动预测 ==========
         st.divider()
@@ -361,11 +361,11 @@ elif page == "🧪 Model Validation":
             with col1:
                 st.metric("Prediction Period Days", f"{len(rolling_df)}")
             with col2:
-                st.metric("95% VaR Breakthrough Rate", f"{rolling_break_95_rate*100:.2f}% (5%)")
+                st.metric("95% VaR Breakthrough Rate", f"{rolling_break_95_rate*100:.2f}% ")
             with col3:
                 st.metric("99% VaR Breakthrough Count", f"{rolling_break_99}")
             with col4:
-                st.metric("99% VaR Breakthrough Rate", f"{rolling_break_99_rate*100:.2f}% (1%)")
+                st.metric("99% VaR Breakthrough Rate", f"{rolling_break_99_rate*100:.2f}% ")
 
 # 4. 预测页面
 elif page == "🔮 Prediction":
@@ -412,4 +412,5 @@ elif page == "🔮 Prediction":
         - With 99% confidence (extreme risk): Maximum expected loss = **{var_99*100:.2f}%**
         - t-Distribution VaR accounts for crypto's fat tail (more conservative)
         """)
+
 
