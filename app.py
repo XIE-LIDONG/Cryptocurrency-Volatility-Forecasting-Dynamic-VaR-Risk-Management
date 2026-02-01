@@ -167,7 +167,6 @@ if page == "🏠 Home":
     st.markdown(
     """
     <div style='display: flex; justify-content: space-between; align-items: center;'>
-        <h1 style='margin: 0;'>📄 PDF Splitter</h1>
         <p style='color: #666666; font-size: 14px; margin: 0;'>By XIE LI DONG</p>
     </div>
     """,
@@ -420,6 +419,7 @@ elif page == "🔮 Prediction":
         - With 99% confidence (extreme risk): Maximum expected loss = **{var_99*100:.2f}%**
         - t-Distribution VaR accounts for crypto's fat tail (more conservative)
         """)
+
 
 
 
