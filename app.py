@@ -163,8 +163,17 @@ page = st.sidebar.radio(
 if page == "🏠 Home":
     st.title("📈 Crypto Volatility & VaR Dashboard")
     st.subheader("Real-Time GARCH(1,1) Modeling & Risk Analysis for BTC/ETH")
+
+    st.markdown(
+    """
+    <div style='display: flex; justify-content: space-between; align-items: center;'>
+        <h1 style='margin: 0;'>📄 PDF Splitter</h1>
+        <p style='color: #666666; font-size: 14px; margin: 0;'>By XIE LI DONG</p>
+    </div>
+    """,
+    unsafe_allow_html=True
+)
     st.divider()
-    
     # 核心选择区
     col1, col2, col3 = st.columns([1.5, 2, 1.5])
     with col1:
@@ -411,6 +420,7 @@ elif page == "🔮 Prediction":
         - With 99% confidence (extreme risk): Maximum expected loss = **{var_99*100:.2f}%**
         - t-Distribution VaR accounts for crypto's fat tail (more conservative)
         """)
+
 
 
 
