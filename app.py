@@ -413,8 +413,9 @@ elif page == "🧪 Model Validation":
             rolling_mae = np.mean(np.abs(rolling_df['pred_vol'] - rolling_df['actual_vol']))
             full_mae_rolling = np.mean(np.abs(df['cond_vol'] - df['simple_vol']))
             
-            # 6-column stats (add Full Sample MAE)
-            col1, col2, col3, col4, col5, col6 = st.columns(6)
+            # Split stats into 2 rows for better layout
+            # Row 1: Core VaR stats (4 columns)
+            col1, col2, col3, col4 = st.columns(4)
             with col1:
                 st.metric("Prediction Period Days", f"{len(rolling_df)}")
             with col2:
@@ -423,11 +424,15 @@ elif page == "🧪 Model Validation":
                 st.metric("99% VaR Breakthrough Count", f"{rolling_break_99}")
             with col4:
                 st.metric("99% VaR Breakthrough Rate", f"{rolling_break_99_rate*100:.2f}% ")
+            
+            # Row 2: MAE stats (2 columns) + captions
+            col5, col6 = st.columns(2)
             with col5:
                 st.metric("Rolling Prediction MAE", f"{rolling_mae:.6f}")
+                st.caption("MAE between predicted volatility (rolling window) and actual GARCH volatility. Smaller = better prediction.")
             with col6:
                 st.metric("Full Sample MAE", f"{full_mae_rolling:.6f}")
-
+                st.caption("MAE between GARCH volatility and raw 21-day rolling volatility. Smaller = better fitting.")
 # 4. Prediction page
 elif page == "🔮 Prediction":
     st.title("🔮 Next-Day Prediction")
@@ -473,5 +478,6 @@ elif page == "🔮 Prediction":
         - With 99% confidence (extreme risk): Maximum expected loss = **{var_99*100:.2f}%**
         - t-Distribution VaR accounts for crypto's fat tail (more conservative)
         """)
+
 
 
