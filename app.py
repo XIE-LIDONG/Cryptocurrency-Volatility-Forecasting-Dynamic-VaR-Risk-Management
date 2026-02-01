@@ -185,16 +185,26 @@ if page == "🏠 Home":
         )
         st.session_state.selected_asset = selected_asset
     with col2:
-        # Date range settings
-        min_start = pd.Timestamp("2017-01-01").date()
-        max_end = pd.Timestamp.now().date()
-        default_start = pd.Timestamp.now() - pd.DateOffset(years=3)
-        date_range = st.date_input(
-            "Select Date Range",
-            value=[default_start.date(), max_end],
-            min_value=min_start,
-            max_value=max_end
-        )
+    # 分开选择起始/结束日期（手选，默认2024-01-01到最新）
+    min_date = pd.Timestamp("2017-01-01").date()  # 最早可选日期
+    max_date = pd.Timestamp.now().date()          # 最晚可选日期
+    default_start = pd.Timestamp("2024-01-01").date()  # 默认起始日期
+    default_end = max_date                             # 默认结束日期
+    
+    # 单独的起始日期选择框
+    start_date = st.date_input(
+        "Start Date",
+        value=default_start,
+        min_value=min_date,
+        max_value=max_date
+    )
+    # 单独的结束日期选择框
+    end_date = st.date_input(
+        "End Date",
+        value=default_end,
+        min_value=min_date,
+        max_value=max_date
+    )
     with col3:
         var_dist = st.radio(
             "VaR Distribution Type",
@@ -207,7 +217,7 @@ if page == "🏠 Home":
     if st.button("🔄 Run Analysis (Pull Data + Fit GARCH + Calculate VaR)", type="primary"):
         with st.spinner("Processing... (This may take 10-20 seconds)"):
             # Pull data
-            df = get_crypto_data(selected_asset, date_range[0], date_range[1])
+            df = get_crypto_data(selected_asset, start_date, end_date)
             st.session_state.df = df
             st.success(f"✅ Successfully pulled {len(df)} days of {selected_asset} data")
             
@@ -421,3 +431,4 @@ elif page == "🔮 Prediction":
         - With 99% confidence (extreme risk): Maximum expected loss = **{var_99*100:.2f}%**
         - t-Distribution VaR accounts for crypto's fat tail (more conservative)
         """)
+
