@@ -411,9 +411,10 @@ elif page == "🧪 Model Validation":
             rolling_break_99 = (rolling_df['actual_loss'] > rolling_df['pred_var_99']).sum()
             rolling_break_99_rate = rolling_break_99 / len(rolling_df)
             rolling_mae = np.mean(np.abs(rolling_df['pred_vol'] - rolling_df['actual_vol']))
+            full_mae_rolling = np.mean(np.abs(df['cond_vol'] - df['simple_vol']))
             
-            # 5-column stats (including MAE)
-            col1, col2, col3, col4, col5 = st.columns(5)
+            # 6-column stats (add Full Sample MAE)
+            col1, col2, col3, col4, col5, col6 = st.columns(6)
             with col1:
                 st.metric("Prediction Period Days", f"{len(rolling_df)}")
             with col2:
@@ -423,7 +424,9 @@ elif page == "🧪 Model Validation":
             with col4:
                 st.metric("99% VaR Breakthrough Rate", f"{rolling_break_99_rate*100:.2f}% ")
             with col5:
-                st.metric("Rolling Prediction MAE (Volatility)", f"{rolling_mae:.6f}")
+                st.metric("Rolling Prediction MAE", f"{rolling_mae:.6f}")
+            with col6:
+                st.metric("Full Sample MAE", f"{full_mae_rolling:.6f}")
 
 # 4. Prediction page
 elif page == "🔮 Prediction":
@@ -470,4 +473,5 @@ elif page == "🔮 Prediction":
         - With 99% confidence (extreme risk): Maximum expected loss = **{var_99*100:.2f}%**
         - t-Distribution VaR accounts for crypto's fat tail (more conservative)
         """)
+
 
