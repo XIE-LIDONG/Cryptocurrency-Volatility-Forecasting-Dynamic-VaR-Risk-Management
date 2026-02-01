@@ -9,19 +9,19 @@ import warnings
 from datetime import datetime, timedelta
 warnings.filterwarnings('ignore')
 
-# ====================== 全局设置 ======================
+# Global settings
 st.set_page_config(
     page_title="Crypto Volatility & VaR Dashboard",
     page_icon="📈",
     layout="wide"
 )
 
-# 绘图设置
+# Plot config
 plt.style.use('default')
 plt.rcParams['font.family'] = 'DejaVu Sans'
 plt.rcParams['axes.unicode_minus'] = False
 
-# 初始化session state（共享数据，避免重复计算）
+# Session state initialization
 if 'df' not in st.session_state:
     st.session_state.df = None
 if 'garch_params' not in st.session_state:
@@ -37,27 +37,28 @@ if 'var_99' not in st.session_state:
 if 'cond_vol' not in st.session_state:
     st.session_state.cond_vol = None
 
-# ====================== 核心函数 ======================
+# Core functions
 @st.cache_data(ttl=3600)
 def get_crypto_data(asset, start_date, end_date):
-    """从Yahoo Finance拉取加密货币数据（支持BTC/ETH）"""
+    # Pull crypto data from Yahoo Finance (BTC/ETH)
     ticker_map = {
         "Bitcoin (BTC)": "BTC-USD",
         "Ethereum (ETH)": "ETH-USD"
     }
     df = yf.download(ticker_map[asset], start=start_date, end=end_date)
-    # 保留核心列并处理
+    
+    # Data preprocessing
     df = df[['Close']].copy()
-    df['returns'] = df['Close'].pct_change()  # 简单收益率
-    df['log_returns'] = np.log(df['Close'] / df['Close'].shift(1))  # 对数收益率
-    df['simple_vol'] = df['returns'].rolling(window=21).std()  # 21天滚动波动率
+    df['returns'] = df['Close'].pct_change()
+    df['log_returns'] = np.log(df['Close'] / df['Close'].shift(1))
+    df['simple_vol'] = df['returns'].rolling(window=21).std()
     df = df.dropna()
     df.reset_index(inplace=True)
     df.rename(columns={'Date': 'date'}, inplace=True)
     return df
 
 def fit_garch_model(returns):
-    """拟合GARCH(1,1)模型，返回波动率和参数"""
+    # Fit GARCH(1,1) model and return volatility + parameters
     am = arch_model(returns * 100, mean='Zero', vol='GARCH', p=1, q=1)
     res = am.fit(disp='off')
     
@@ -73,7 +74,7 @@ def fit_garch_model(returns):
     return cond_vol, params
 
 def calculate_var(cond_vol, dist_type="Normal"):
-    """计算动态VaR"""
+    # Calculate dynamic Value at Risk
     var_95_normal = 1.65 * cond_vol
     var_99_normal = 2.33 * cond_vol
     
@@ -88,7 +89,7 @@ def calculate_var(cond_vol, dist_type="Normal"):
         return var_95_t, var_99_t
 
 def predict_next_vol_var(returns, params, last_vol):
-    """预测下一日波动率和VaR"""
+    # Predict next day volatility and VaR
     last_residual = returns.iloc[-1]
     next_vol_sq = params['omega'] + params['alpha'] * (last_residual **2) + params['beta'] * (last_vol** 2)
     next_vol = np.sqrt(next_vol_sq)
@@ -103,7 +104,7 @@ def predict_next_vol_var(returns, params, last_vol):
     return next_vol, var_95, var_99, var_95_t, var_99_t
 
 def rolling_window_prediction(df, window_size):
-    """滚动预测核心函数：按1/3数据设窗口，返回预测结果"""
+    # Rolling window prediction core function
     rolling_vol = []
     rolling_var_95 = []
     rolling_var_99 = []
@@ -111,36 +112,37 @@ def rolling_window_prediction(df, window_size):
     actual_loss = []
     dates = []
     
-    # 从window_size开始滚动
+    # Start rolling from window_size
     for i in range(window_size, len(df)):
-        # 仅用窗口内的真实数据训练
         train_returns = df['returns'].iloc[i-window_size:i]
-        # 拟合GARCH
+        # Fit GARCH model
         am = arch_model(train_returns * 100, mean='Zero', vol='GARCH', p=1, q=1)
         res = am.fit(disp='off')
-        # 提取参数和最后一天波动率
+        
+        # Extract parameters
         params = {
             'omega': res.params['omega'] / 10000,
             'alpha': res.params['alpha[1]'],
             'beta': res.params['beta[1]']
         }
         last_vol = res.conditional_volatility.iloc[-1] / 100
-        # 预测下一天波动率和VaR
+        
+        # Predict next day values
         next_residual = train_returns.iloc[-1]
         next_vol_sq = params['omega'] + params['alpha'] * (next_residual **2) + params['beta'] * (last_vol** 2)
         next_vol = np.sqrt(next_vol_sq)
         var_95 = 1.65 * next_vol
         var_99 = 2.33 * next_vol
         
-        # 存储结果（真实值+预测值）
+        # Store results
         rolling_vol.append(next_vol)
         rolling_var_95.append(var_95)
         rolling_var_99.append(var_99)
-        actual_vol.append(df['cond_vol'].iloc[i])  # 真实GARCH波动率
-        actual_loss.append(-df['returns'].iloc[i])  # 真实亏损
+        actual_vol.append(df['cond_vol'].iloc[i])
+        actual_loss.append(-df['returns'].iloc[i])
         dates.append(df['date'].iloc[i])
     
-    # 整理结果
+    # Format results
     rolling_df = pd.DataFrame({
         'date': dates,
         'pred_vol': rolling_vol,
@@ -151,15 +153,15 @@ def rolling_window_prediction(df, window_size):
     })
     return rolling_df
 
-# ====================== 侧边导航栏 ======================
+# Sidebar navigation
 st.sidebar.title("📑 Navigation")
 page = st.sidebar.radio(
     "Select Function",
     ["🏠 Home", "📊 Data Visualization", "🧪 Model Validation", "🔮 Prediction"]
 )
 
-# ====================== 页面逻辑 ======================
-# 1. 主页：核心选择区 + 数据加载
+# Page logic
+# 1. Home page: Core selection + data loading
 if page == "🏠 Home":
     st.markdown(
     """
@@ -172,9 +174,8 @@ if page == "🏠 Home":
     st.title("📈 Crypto Volatility & VaR Dashboard")
     st.subheader("Real-Time GARCH(1,1) Modeling & Risk Analysis for BTC/ETH")
 
-
     st.divider()
-    # 核心选择区
+    # Core selection area
     col1, col2, col3 = st.columns([1.5, 2, 1.5])
     with col1:
         selected_asset = st.selectbox(
@@ -184,7 +185,7 @@ if page == "🏠 Home":
         )
         st.session_state.selected_asset = selected_asset
     with col2:
-        # 时间范围：起始最早2017-01-01，结束默认当天
+        # Date range settings
         min_start = pd.Timestamp("2017-01-01").date()
         max_end = pd.Timestamp.now().date()
         default_start = pd.Timestamp.now() - pd.DateOffset(years=3)
@@ -202,22 +203,22 @@ if page == "🏠 Home":
         )
         st.session_state.var_dist = var_dist
     
-    # 一键运行按钮
+    # Run analysis button
     if st.button("🔄 Run Analysis (Pull Data + Fit GARCH + Calculate VaR)", type="primary"):
         with st.spinner("Processing... (This may take 10-20 seconds)"):
-            # 拉取数据
+            # Pull data
             df = get_crypto_data(selected_asset, date_range[0], date_range[1])
             st.session_state.df = df
             st.success(f"✅ Successfully pulled {len(df)} days of {selected_asset} data")
             
-            # 拟合GARCH模型
+            # Fit GARCH model
             cond_vol, garch_params = fit_garch_model(df['returns'])
             st.session_state.cond_vol = cond_vol
             st.session_state.garch_params = garch_params
             df['cond_vol'] = cond_vol.values
             st.success(f"✅ GARCH(1,1) model fitted successfully")
             
-            # 计算VaR
+            # Calculate VaR
             var_95, var_99 = calculate_var(cond_vol, var_dist.split(' ')[0])
             st.session_state.var_95 = var_95
             st.session_state.var_99 = var_99
@@ -231,35 +232,35 @@ if page == "🏠 Home":
             
             st.info("✅ All calculations completed! You can now navigate to other tabs to view results.")
 
-# 2. 数据可视化页面
+# 2. Data Visualization page
 elif page == "📊 Data Visualization":
     st.title("📊 Data Visualization")
     st.divider()
     
-    # 检查数据是否加载
+    # Check data loading
     if st.session_state.df is None:
         st.warning("⚠️ Please run analysis first on the Home page!")
     else:
         df = st.session_state.df
         selected_asset = st.session_state.selected_asset
         
-        # 绘制三张核心图
+        # Plot core charts
         fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(15, 12), sharex=True)
         
-        # 价格图
+        # Price chart
         ax1.plot(df['date'], df['Close'], color="darkblue", linewidth=1.2)
         ax1.set_ylabel("Closing Price (USD)")
         ax1.set_title(f"{selected_asset} Historical Price")
         ax1.grid(alpha=0.3)
         
-        # 对数收益率图
+        # Log returns chart
         ax2.plot(df['date'], df['log_returns'], color="green", alpha=0.7)
         ax2.axhline(y=0, color="black", linestyle="--", alpha=0.5)
         ax2.set_ylabel("Log Returns (Decimal)")
         ax2.set_title(f"{selected_asset} Log Returns")
         ax2.grid(alpha=0.3)
         
-        # 原始波动率图
+        # Rolling volatility chart
         ax3.plot(df['date'], df['simple_vol'], color="orange", linewidth=1.2)
         ax3.set_xlabel("Date")
         ax3.set_ylabel("21-Day Rolling Volatility (Decimal)")
@@ -269,12 +270,12 @@ elif page == "📊 Data Visualization":
         plt.tight_layout()
         st.pyplot(fig)
 
-# 3. 模型验证页面
+# 3. Model Validation page
 elif page == "🧪 Model Validation":
     st.title("🧪 Model Validation")
     st.divider()
     
-    # 检查数据是否加载
+    # Check data loading
     if st.session_state.df is None:
         st.warning("⚠️ Please run analysis first on the Home page!")
     else:
@@ -284,15 +285,15 @@ elif page == "🧪 Model Validation":
         var_95 = st.session_state.var_95
         var_99 = st.session_state.var_99
         
-        # ========== Dynamic VaR Risk Analysis ==========
+        # Dynamic VaR Risk Analysis
         st.subheader("🛡️ Dynamic VaR Risk Analysis")
-        # 计算击穿率
+        # Calculate breakthrough rates
         break_95_count = df['break_95'].sum()
         break_95_rate = break_95_count / len(df)
         break_99_count = df['break_99'].sum()
         break_99_rate = break_99_count / len(df)
         
-        # 绘制VaR图
+        # Plot VaR chart
         fig, ax = plt.subplots(figsize=(15, 7))
         ax.plot(df['date'], df['returns'], color="gray", alpha=0.5, label="Daily Returns")
         ax.axhline(y=0, color="black", linestyle="--", alpha=0.5)
@@ -311,7 +312,7 @@ elif page == "🧪 Model Validation":
         ax.grid(alpha=0.3)
         st.pyplot(fig)
         
-        # VaR回测结果
+        # VaR backtest results
         col1, col2, col3, col4 = st.columns(4)
         with col1:
             st.metric("95% VaR Breakthrough Count", f"{break_95_count}")
@@ -322,20 +323,20 @@ elif page == "🧪 Model Validation":
         with col4:
             st.metric("99% VaR Breakthrough Rate", f"{break_99_rate*100:.2f}% ")
         
-        # ========== 滚动预测 ==========
+        # Rolling window prediction
         st.divider()
         st.subheader("🎯 Rolling Window Prediction")
-        # 自动计算窗口大小=数据长度的1/3（取整）
+        # Auto calculate window size (1/3 of total data)
         window_size = int(len(df) / 3)
         st.info(f"🔍 Auto-set window size: {window_size} days (1/3 of total data: {len(df)} days)")
         
         with st.spinner("Running rolling prediction... (This may take 1-2 minutes)"):
             rolling_df = rolling_window_prediction(df, window_size)
             
-            # 绘制滚动预测图
+            # Plot rolling prediction charts
             fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(15, 12), sharex=True)
             
-            # 波动率对比
+            # Volatility comparison
             ax1.plot(rolling_df['date'], rolling_df['pred_vol'], color="blue", linewidth=1.5, label="Predicted Volatility")
             ax1.plot(rolling_df['date'], rolling_df['actual_vol'], color="green", linewidth=1.5, alpha=0.7, label="Actual GARCH Volatility")
             start_pred_date = rolling_df['date'].iloc[0]
@@ -345,7 +346,7 @@ elif page == "🧪 Model Validation":
             ax1.legend()
             ax1.grid(alpha=0.3)
             
-            # VaR对比
+            # VaR comparison
             ax2.plot(rolling_df['date'], rolling_df['pred_var_95'], color="red", linewidth=1.5, label="Predicted 95% VaR")
             ax2.plot(rolling_df['date'], rolling_df['pred_var_99'], color="darkred", linewidth=1.5, label="Predicted 99% VaR")
             ax2.plot(rolling_df['date'], rolling_df['actual_loss'], color="gray", alpha=0.7, label="Actual Loss")
@@ -359,7 +360,7 @@ elif page == "🧪 Model Validation":
             plt.tight_layout()
             st.pyplot(fig)
             
-            # 滚动预测结果统计
+            # Rolling prediction stats
             rolling_break_95 = (rolling_df['actual_loss'] > rolling_df['pred_var_95']).sum()
             rolling_break_95_rate = rolling_break_95 / len(rolling_df)
             rolling_break_99 = (rolling_df['actual_loss'] > rolling_df['pred_var_99']).sum()
@@ -375,12 +376,12 @@ elif page == "🧪 Model Validation":
             with col4:
                 st.metric("99% VaR Breakthrough Rate", f"{rolling_break_99_rate*100:.2f}% ")
 
-# 4. 预测页面
+# 4. Prediction page
 elif page == "🔮 Prediction":
     st.title("🔮 Next-Day Prediction")
     st.divider()
     
-    # 检查数据是否加载
+    # Check data loading
     if st.session_state.df is None or st.session_state.garch_params is None:
         st.warning("⚠️ Please run analysis first on the Home page!")
     else:
@@ -388,19 +389,19 @@ elif page == "🔮 Prediction":
         selected_asset = st.session_state.selected_asset
         garch_params = st.session_state.garch_params
         
-        # 计算下一个交易日
+        # Calculate next trading day
         last_date = df['date'].iloc[-1]
         next_date = last_date + timedelta(days=1)
-        # 跳过周末（加密货币周末交易，保留逻辑兼容）
+        # Skip weekends (crypto trades on weekends, keep compatibility)
         while next_date.weekday() >= 5:
             next_date += timedelta(days=1)
         next_date_str = next_date.strftime("%Y-%m-%d")
         
-        # 预测次日数据
+        # Predict next day data
         last_vol = df['cond_vol'].iloc[-1]
         next_vol, var_95, var_99, var_95_t, var_99_t = predict_next_vol_var(df['returns'], garch_params, last_vol)
         
-        # 展示预测结果
+        # Show prediction results
         st.subheader(f"📅 Prediction for Next Trading Day: {next_date_str}")
         col1, col2, col3, col4 = st.columns(4)
         with col1:
@@ -412,7 +413,7 @@ elif page == "🔮 Prediction":
         with col4:
             st.metric("95% t-VaR (Fat Tail)", f"{var_95_t*100:.2f}%")
         
-        # 预测解释
+        # Prediction explanation
         st.markdown(f"""
         ### 📝 Prediction Interpretation
         For **{selected_asset.split(' ')[0]}** on {next_date_str}:
@@ -420,8 +421,3 @@ elif page == "🔮 Prediction":
         - With 99% confidence (extreme risk): Maximum expected loss = **{var_99*100:.2f}%**
         - t-Distribution VaR accounts for crypto's fat tail (more conservative)
         """)
-
-
-
-
-
