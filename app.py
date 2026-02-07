@@ -296,7 +296,6 @@ elif page == "🧪 Model Validation":
         var_99 = st.session_state.var_99
         garch_params = st.session_state.garch_params
         
-        # ========== GARCH Model Parameters & Full Volatility Comparison ==========
         st.subheader("📊 GARCH Model Parameters & Volatility Comparison")
         # Display GARCH model parameters
                 # Display GARCH model parameters with explanations
@@ -330,7 +329,7 @@ elif page == "🧪 Model Validation":
         st.metric("Full Sample Volatility MAE (GARCH vs Raw)", f"{mae_full:.6f}")
         st.divider()
         
-        # ========== Dynamic VaR Risk Analysis ==========
+        
         st.subheader("🛡️ Dynamic VaR Risk Analysis")
         # Calculate breakthrough rates
         break_95_count = df['break_95'].sum()
@@ -368,7 +367,7 @@ elif page == "🧪 Model Validation":
         with col4:
             st.metric("99% VaR Breakthrough Rate", f"{break_99_rate*100:.2f}% ")
         
-        # ========== Rolling Window Prediction ==========
+        # Rolling Window Prediction
         st.divider()
         st.subheader("🎯 Rolling Window Prediction")
         # Auto calculate window size (1/3 of total data)
@@ -478,6 +477,7 @@ elif page == "🔮 Prediction":
         - With 99% confidence (extreme risk): Maximum expected loss = **{var_99*100:.2f}%**
         - t-Distribution VaR accounts for crypto's fat tail (more conservative)
         """)
+
 
 
 
