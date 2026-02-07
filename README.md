@@ -1,4 +1,5 @@
 Crypto Volatility & VaR Dashboard
+
 A Streamlit dashboard for cryptocurrency volatility modeling and risk analysis. It uses GARCH(1,1) to model volatility and calculates dynamic Value‑at‑Risk (VaR) for Bitcoin and Ethereum.
 Features
 Fetch historical crypto data from Yahoo Finance
